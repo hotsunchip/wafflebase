@@ -7,7 +7,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "ci-filter-test-base"]
   # Merge queue. When a maintainer clicks "Merge when ready", GitHub builds a
   # throwaway `gh-readonly-queue/main/pr-<n>-<sha>` branch holding that PR merged
   # onto main's current tip — plus any PRs ahead of it in the queue — and asks for
