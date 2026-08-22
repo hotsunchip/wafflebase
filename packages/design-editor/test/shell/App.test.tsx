@@ -266,6 +266,37 @@ describe('publishing the staged plan', () => {
     expect(calls).toEqual([]);
   });
 
+  it('does not let an older publication overtake a newer one', async () => {
+    /*
+     * The server keeps the LAST plan it receives, not the newest one. Two publishes in
+     * flight can arrive out of order, and then the frame previews an edit already moved
+     * past. This holds the first call open, lets a second be issued, and asserts the
+     * second cannot start until the first settles — which is what makes arrival order
+     * the same as revision order.
+     */
+    const started: number[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const bridge = stubBridge({
+      plan: (async () => {
+        started.push(started.length);
+        if (started.length === 1) await new Promise<void>((r) => (releaseFirst = r));
+        return { ok: true };
+      }) as never,
+    });
+    const host = await mount(bridge);
+    // The mount publish is in flight and held. A second revision must NOT start.
+    await act(async () => {
+      const [scenesBtn] = [...host.querySelectorAll('button')].filter((b) =>
+        /scenes/i.test((b.textContent ?? '').trim()),
+      );
+      scenesBtn?.click();
+    });
+    expect(started.length).toBe(1);
+    await act(async () => {
+      releaseFirst?.();
+    });
+  });
+
   it('says so when the preview cannot be updated', async () => {
     // A refused publish means the screen is not what you staged. Silence there is worse
     // than the stale pixels, because the next thing you do is trust them.

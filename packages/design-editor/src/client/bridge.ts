@@ -216,6 +216,14 @@ export interface CandidatesResult extends BridgeResult {
 export interface PlanResult extends BridgeResult {
   side?: FrameSide;
   count?: number;
+  /** Module ids that re-served. Fewer than the files published, and that is normal. */
+  reloaded?: string[];
+  /**
+   * Files the server could not re-serve. NON-EMPTY MEANS THE FRAME IS STALE — the plan
+   * was stored, so nothing is lost, but what is on screen is not what was staged.
+   * `ok` is false in that case; the edit still saves.
+   */
+  failed?: string[];
 }
 
 export interface BridgeClient {

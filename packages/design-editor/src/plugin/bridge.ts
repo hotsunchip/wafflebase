@@ -184,6 +184,12 @@ async function readSources(
 
 /** The slice of `ViteDevServer` `pushArtifacts` needs, so it is testable without one. */
 type ArtifactModule = Parameters<ViteDevServer['reloadModule']>[0];
+/** What one publish did: the module ids that re-served, and the files that could not. */
+export interface PublishedPlan {
+  reloaded: string[];
+  failed: string[];
+}
+
 export interface ArtifactHost {
   moduleGraph: { getModulesByFile(file: string): Set<ArtifactModule> | undefined };
   reloadModule(mod: ArtifactModule): Promise<void>;
@@ -206,18 +212,26 @@ export interface ArtifactHost {
  * Only modules belonging to THIS side are reloaded. `before` and `after` are two
  * transforms of the same file, and reloading both would make one side's preview move
  * when the other's plan changed.
+ *
+ * TAKES a file union and RETURNS module ids, which are not the same cardinality: one
+ * file can back several frame-qualified modules, and a file in the union that backs
+ * none contributes nothing. So `reloaded` being shorter than `files` — or empty for a
+ * non-empty union — is ordinary, and is not the signal that something went wrong.
+ * `failed` is.
  */
 export async function publishPlan(
   server: ArtifactHost,
   side: FrameSide,
   files: Iterable<string>,
   resolve: (rel: string) => { abs: string } | { error: string },
-): Promise<string[]> {
+): Promise<PublishedPlan> {
   const reloaded: string[] = [];
+  const failed: string[] = [];
   for (const rel of files) {
     const r = resolve(rel);
     if ('error' in r) {
       server.config.logger.warn(`[design-editor] plan names an unreachable file ${rel}: ${r.error}`);
+      failed.push(rel);
       continue;
     }
     for (const mod of server.moduleGraph.getModulesByFile(r.abs) ?? []) {
@@ -226,13 +240,16 @@ export async function publishPlan(
         await server.reloadModule(mod);
         reloaded.push(mod.id ?? rel);
       } catch (err) {
-        // Logged, not thrown: one unreloadable module must not lose the rest of the
-        // plan. Silence here means "I staged an edit and the frame did not move".
+        // Collected, not thrown: one unreloadable module must not lose the rest of the
+        // plan. But it must not be swallowed either — the log is on the SERVER, and the
+        // person who staged the edit is looking at a browser showing the old pixels.
+        // `failed` is what lets the shell say so.
         server.config.logger.warn(`[design-editor] could not reload ${rel}: ${String(err)}`);
+        failed.push(rel);
       }
     }
   }
-  return reloaded;
+  return { reloaded, failed };
 }
 
 /**
@@ -745,10 +762,22 @@ export function bridge(deps: BridgeDeps): Plugin {
               ...planFiles(next),
             ]);
             deps.plans.set(side, next);
-            const reloaded = await publishPlan(server, side, union, (rel) =>
+            const { reloaded, failed } = await publishPlan(server, side, union, (rel) =>
               deps.guard.resolveSafe(rel),
             );
-            return json(res, 200, { ok: true, side, count: next.length, reloaded });
+            // The plan IS stored, so this is not a 4xx and the edit is not lost. But a
+            // file that could not be re-served means the frame is showing something
+            // other than what was staged, and the shell has to be able to say so.
+            return json(res, 200, {
+              ok: failed.length === 0,
+              side,
+              count: next.length,
+              reloaded,
+              failed,
+              ...(failed.length
+                ? { error: `could not re-serve ${failed.length} file(s): ${failed.join(', ')}` }
+                : {}),
+            });
           }
 
           return next();

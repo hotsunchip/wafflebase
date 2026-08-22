@@ -656,23 +656,35 @@ export function App({ bridge = defaultBridge }: { bridge?: BridgeClient } = {}) 
    * so the last edit dropping out is the case that reverts the frame. Skipping the empty
    * send would leave the last patch on screen forever.
    */
+  /**
+   * SERIALISED, because the server keeps the LAST plan it receives, not the newest one.
+   * Typing in the class editor fires a revision per keystroke; two in flight can arrive
+   * out of order, and then `plans.set` ends on the older one and the frame previews an
+   * edit the user has already moved past. Chaining each publish onto the previous one
+   * makes arrival order the same as revision order.
+   *
+   * The chain is a ref rather than state: it must not re-render anything, and a stale
+   * closure over it would fork the chain into two.
+   */
+  const publishChain = useRef<Promise<unknown>>(Promise.resolve());
   useEffect(() => {
     if (!sceneId) return;
     let live = true;
     const intents = plan.filter((p) => p.mode === 'apply').map((p) => p.intent);
-    void bridge
-      .plan('after', intents)
-      .then((r) => {
-        // A refusal here is not fatal — the edit is still staged and Save still works —
-        // but it means what you are looking at is not what you staged, and silence about
-        // that is worse than the stale pixels.
+    publishChain.current = publishChain.current.then(async () => {
+      try {
+        const r = await bridge.plan('after', intents);
+        // Not fatal — the edit is still staged and Save still works — but it means what
+        // you are looking at is not what you staged, and silence about that is worse
+        // than the stale pixels. `ok` is false when the server stored the plan and
+        // could not re-serve some of its files.
         if (live && r && 'ok' in r && !r.ok) {
           notify('error', 'Preview not updated', r.error ?? 'The frame could not be updated.');
         }
-      })
-      .catch(() => {
+      } catch {
         if (live) notify('error', 'Preview not updated', 'The bridge did not answer.');
-      });
+      }
+    });
     return () => {
       live = false;
     };

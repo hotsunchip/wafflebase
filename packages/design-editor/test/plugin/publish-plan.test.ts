@@ -76,7 +76,10 @@ describe('publishPlan', () => {
   it('warns rather than throwing when a file is unreachable', async () => {
     const h = host({});
     const out = await publishPlan(h, 'after', ['../escape.tsx'], () => ({ error: 'outside root' }));
-    expect(out).toEqual([]);
+    expect(out.reloaded).toEqual([]);
+    // Reported, not just logged: the log is on the server and the person who staged the
+    // edit is looking at a browser showing the old pixels.
+    expect(out.failed).toEqual(['../escape.tsx']);
     expect(h.warnings[0]).toContain('outside root');
   });
 
@@ -90,7 +93,8 @@ describe('publishPlan', () => {
       { failOn: '/repo/a.tsx?wbFrame=after' },
     );
     const out = await publishPlan(h, 'after', ['a.tsx', 'b.tsx'], ok);
-    expect(out).toEqual(['/repo/b.tsx?wbFrame=after']);
+    expect(out.reloaded).toEqual(['/repo/b.tsx?wbFrame=after']);
+    expect(out.failed).toEqual(['a.tsx']);
     expect(h.warnings[0]).toContain('could not reload');
   });
 });

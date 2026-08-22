@@ -567,13 +567,26 @@ token edit repainted the button preview and left every scene untouched.
 > when the union is wrong.
 
 
-Body `{ side: "before" | "after", intents }` → `{ ok, side, count, reloaded }`.
-**Writes nothing.**
+Body `{ side: "before" | "after", intents }` →
+`{ ok, side, count, reloaded, failed }`. **Writes nothing.**
 
 Stores the layout half of a plan for one frame side and invalidates the modules that
-plan touches, so `scene-patch` re-serves them with the patch applied. Non-layout kinds are dropped server-side:
-token edits preview through §3.8 instead, and letting both paths claim the same
-module would have them fighting over it.
+plan touches, so `scene-patch` re-serves them with the patch applied. Non-layout kinds
+are dropped server-side: token edits preview through §3.8 instead, and letting both
+paths claim the same module would have them fighting over it.
+
+**The reload input is FILES; `reloaded` is MODULE IDS.** They are not the same
+cardinality, and reading one as the other is how this gets misdiagnosed. The input is
+the union of the old plan's files and the new one's (below). The output names the
+frame-qualified modules that actually re-served — one file can back several, and a file
+backing none for this side contributes nothing. So `reloaded` shorter than the union, or
+empty for a non-empty union, is ordinary and is **not** the failure signal.
+
+`failed` is. It lists files that could not be re-served, either because the path did not
+resolve or because the reload threw. Non-empty means the plan is stored but the frame is
+showing something other than what was staged, so `ok` is false and the shell says so —
+the edit still saves. A reload failure that only reached the server log would leave the
+person who staged the edit looking at stale pixels with no way to know.
 
 
 

@@ -31,6 +31,13 @@ const HERE = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.PORT ?? 5299);
 /** Generous: the cold graph is ~6,000 modules on a drvfs mount. */
 const PAINT_TIMEOUT_MS = Number(process.env.PAINT_TIMEOUT_MS ?? 300_000);
+/*
+ * The plan-publish → module-reload round trip, which is local and should be quick.
+ * NOT `PAINT_TIMEOUT_MS`: that is the budget for mounting a whole scene cold, and
+ * spending five minutes to learn that a `postMessage` round trip never completed
+ * turns a fast, clear failure into a stalled run.
+ */
+const PREVIEW_TIMEOUT_MS = Number(process.env.PREVIEW_TIMEOUT_MS ?? 20_000);
 /** The monorepo root — the write boundary the plugin is configured with. */
 const ROOT = path.resolve(HERE, '../..');
 /**
@@ -613,34 +620,60 @@ async function main() {
            * has been replaced by the time this runs.
            */
           const nodeId = await editTarget.evaluate((n) => n.getAttribute('data-wb-node'));
-          await page.waitForTimeout(1200); // the plan publish → module reload round trip
-          const staged = await inner.evaluate(
-            (id) =>
-              document.querySelector(`[data-wb-node="${id}"]`)?.className ?? '(node is gone)',
-            nodeId,
-          );
+          /*
+           * WAIT ON THE CONDITION, not on a clock. A fixed delay is wrong in both
+           * directions — too short and the gate reports a bug the code does not have,
+           * too long and every run pays the worst case — and it hides the thing worth
+           * knowing, which is whether the round trip completes at all.
+           */
+          const classOf = (id) =>
+            inner.evaluate(
+              (n) => document.querySelector(`[data-wb-node="${n}"]`)?.className ?? '(node is gone)',
+              id,
+            );
+          const settled = await inner
+            .waitForFunction(
+              (n) =>
+                /\bflex-col\b/.test(
+                  document.querySelector(`[data-wb-node="${n}"]`)?.className ?? '',
+                ),
+              nodeId,
+              { timeout: PREVIEW_TIMEOUT_MS },
+            )
+            .then(() => true)
+            .catch(() => false);
           check(
             'the staged class is on screen BEFORE any save',
-            /\bflex-col\b/.test(String(staged)),
-            String(staged).slice(0, 90),
+            settled,
+            String(await classOf(nodeId)).slice(0, 90),
           );
 
           await page.keyboard.press('Control+z');
           await page.waitForTimeout(400);
           check('⌘Z takes it back', (await saveBtn()).disabled === true, JSON.stringify(await saveBtn()));
 
-          // The REVERT half of the union. An emptied plan names no files of its own, so a
-          // frame that reloads only the new plan's files keeps the patch on screen forever.
-          await page.waitForTimeout(1200);
-          const reverted = await inner.evaluate(
-            (id) =>
-              document.querySelector(`[data-wb-node="${id}"]`)?.className ?? '(node is gone)',
-            nodeId,
-          );
+          /*
+           * The REVERT half of the union. An emptied plan names no files of its own, so a
+           * frame that reloads only the new plan's files keeps the patch on screen forever.
+           *
+           * A MISSING node counts as reverted: the reload replaces the subtree, so the id
+           * resolving to nothing means the reload happened, not that the class survived.
+           */
+          const cleared = await inner
+            .waitForFunction(
+              (n) => {
+                const el = document.querySelector(`[data-wb-node="${n}"]`);
+                return !el || !/\bflex-col\b/.test(el.className ?? '');
+              },
+              nodeId,
+              { timeout: PREVIEW_TIMEOUT_MS },
+            )
+            .then(() => true)
+            .catch(() => false);
           check(
             'and undoing it takes the class OFF the screen too',
-            !/\bflex-col\b/.test(String(reverted)),
-            String(reverted).slice(0, 90),
+            cleared,
+            String(await classOf(nodeId)).slice(0, 90),
           );
 
           await page.keyboard.press('Control+Shift+z');
